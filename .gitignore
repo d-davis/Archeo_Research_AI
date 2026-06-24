@@ -1,0 +1,89 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# ── Sessions & outputs ────────────────────────────────────────────────────────
+sessions/
+*.session.json
+outputs/
+reports/
+*.md.bak
+
+# ── Uploaded data files ───────────────────────────────────────────────────────
+data/
+uploads/
+*.csv
+*.xlsx
+*.xls
+*.shp
+*.dbf
+*.shx
+*.prj
+*.sbn
+*.sbx
+*.cpg
+*.qpj
+*.geojson
+*.tif
+*.tiff
+*.pdf
+
+# Allow example/test fixtures even if they match above patterns
+!tests/fixtures/**
+!examples/**
+
+# ── Generated charts & imagery ────────────────────────────────────────────────
+charts/
+*.png
+*.jpg
+*.jpeg
+!docs/images/**
+
+# ── Temp files ────────────────────────────────────────────────────────────────
+tmp/
+temp/
+*.tmp
+*.temp
+
+# ── Streamlit ─────────────────────────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── OS cruft ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE / editor ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Environment variables ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
