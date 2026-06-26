@@ -28,7 +28,13 @@ RULES:
 3. Consider LOW-severity flags at your discretion.
 4. Do NOT change content that was not flagged. Preserve well-supported claims.
 5. Do NOT add new claims that are not supported by the data.
-6. Maintain the same Markdown section structure as the original.
+6. When a flagged claim contains a potentially useful hypothesis or research
+   direction, DO NOT remove it. Instead, reframe it with explicit hedging
+   language (e.g. "This may suggest...", "One possible interpretation is...",
+   "This pattern warrants further investigation to determine whether...").
+   Preserving speculative insights as clearly-labelled hypotheses is preferable
+   to deletion. The goal is calibration, not suppression.
+7. Maintain the same Markdown section structure as the original.
 
 After the revised report, append a section titled:
 

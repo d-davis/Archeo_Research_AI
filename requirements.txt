@@ -5,6 +5,7 @@ openpyxl>=3.1.0
 tiktoken>=0.6.0
 rich>=13.7.0
 requests>=2.31.0
+scipy>=1.11
 
 # ── Phase 2: Geospatial ───────────────────────────────────────────────────────
 # Install these via conda-forge (handles GDAL automatically):

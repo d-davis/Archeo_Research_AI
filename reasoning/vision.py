@@ -16,21 +16,26 @@ Two-model architecture note:
 """
 import ollama
 
-VISION_SYSTEM_PROMPT = """You are an archaeological imagery analyst.
-You will be shown an image alongside a researcher's question.
+VISION_SYSTEM_PROMPT = """You are a visual pattern analyst. Your job is to describe
+what you observe in an image as objectively and precisely as possible.
+DO NOT attempt archaeological interpretation. DO NOT reference site types,
+cultures, periods, or historical context. That interpretation is done separately.
 
-Describe what you observe with archaeological relevance:
-- Landscape features, terrain patterns, vegetation anomalies
-- Visible structures, earthworks, mounds, or surface disturbances
-- Color patterns, tonal contrasts, or texture variations
-- Anything suggesting human activity, site formation, or land modification
+Describe only what is directly visible:
+- Geometric and linear features: lines, curves, edges, boundaries, shapes
+- Tonal and colour patterns: light/dark contrasts, gradients, colour zones,
+  anomalies that differ from surrounding areas
+- Texture: uniformity, roughness, grain, repeating patterns, texture boundaries
+- Spatial distribution: where features occur within the image (use directional
+  references: north/south/east/west quadrants, centre, periphery)
+- Anomalies: anything that appears discontinuous, unusual, or distinct from
+  the surrounding visual field
+- Image quality: if resolution, contrast, or compression limits what can be
+  observed, state this explicitly
 
-Spatial precision: describe locations within the image (e.g., 'northeast quadrant', 'center').
-Epistemic clarity: distinguish observation from interpretation.
-Resolution honesty: if image quality limits analysis, state this explicitly.
-
-Target length: 200-300 words. Do not add headings or bullet points."""
-
+Be precise and spatial. Describe location, extent, orientation, and contrast
+of every notable feature. Do not speculate about cause or meaning.
+Target length: 200-300 words. Plain prose, no headings or bullet points."""
 
 def run_vision_description(
     image_b64: str,
@@ -50,10 +55,11 @@ def run_vision_description(
     Returns:
         Text description string, or error message on failure.
     """
-    user_message = (
-        f'RESEARCHER QUESTION: {user_prompt}\n\n'
-        f'IMAGE FILE: {filename}\n\n'
-        'Describe what you observe in this image with archaeological relevance.'
+    context_block = (
+        f'IMAGE FILE: {filename}\n'
+        f'RESEARCHER QUESTION (for context only — do not interpret): {user_prompt}\n\n'
+        'Describe the visual patterns, features, and anomalies you observe in this image. '
+        'Be objective and spatial. Do not interpret — only describe.'
     )
 
     try:
@@ -63,7 +69,7 @@ def run_vision_description(
                 {'role': 'system', 'content': VISION_SYSTEM_PROMPT},
                 {
                     'role':    'user',
-                    'content': user_message,
+                    'content': context_block,
                     'images':  [image_b64],
                 },
             ],

@@ -40,6 +40,7 @@ def new_session(
     final_narrative: str,
     critique_result: Optional[dict] = None,
     session_name: Optional[str] = None,
+    file_paths: Optional[List[str]] = None,
 ) -> dict:
     """Create and return a new session object."""
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -51,6 +52,7 @@ def new_session(
         'original_prompt':        original_prompt,
         'files_analyzed':         files_analyzed,
         'model':                  model,
+        'file_paths': file_paths or {},  
         'preprocessed_summaries': preprocessed_summaries,
         'phase1_results':         phase1_results,
         'final_narrative':        final_narrative,
@@ -59,6 +61,7 @@ def new_session(
         'conversation_summary':   None,
         'turn_count':             0,
         'supplementary_sections': [],
+        
     }
 
 

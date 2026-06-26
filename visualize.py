@@ -18,6 +18,8 @@ Chart types generated per file type:
 All charts use a consistent palette derived from the system accent color.
 """
 import json
+import re
+import pandas as pd
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
@@ -284,3 +286,483 @@ def _charts_pdf(summary: dict, out_dir: Path, safe_name: str) -> List[Path]:
     fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
     plt.close(fig)
     return [p]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Follow-up chart generation (Option B: structured chart requests)
+# ═══════════════════════════════════════════════════════════════════════════════
+import re
+import pandas as pd
+# Add at top of file if not already present:
+#   import re
+#   import pandas as pd
+def _load_dataframe(filename: str, session: dict):
+    """
+    Reload a DataFrame from the original file path stored in the session.
+    Returns (df_or_gdf, kind) where kind is 'tabular' or 'geospatial'.
+    Returns (None, None) if the file cannot be loaded.
+    """
+    file_paths = session.get('file_paths', {})
+    path_str = file_paths.get(filename)
+    if not path_str:
+        return None, None
+    path = Path(path_str)
+    if not path.exists():
+        return None, None
+    ext = path.suffix.lower()
+    try:
+        if ext in ('.csv', '.txt'):
+            return pd.read_csv(path, low_memory=False), 'tabular'
+        elif ext in ('.xlsx', '.xls'):
+            return pd.read_excel(path), 'tabular'
+        elif ext in ('.geojson', '.json', '.shp'):
+            import geopandas as gpd
+            return gpd.read_file(path), 'geospatial'
+    except Exception:
+        return None, None
+    return None, None
+def generate_followup_charts(
+    chart_requests: list,
+    session: dict,
+    session_id: str,
+) -> list:
+    """
+    Generate charts from structured CHART_REQUEST dicts.
+    Args:
+        chart_requests: List of dicts parsed from LLM CHART_REQUEST lines
+        session:        Current session object (needs 'file_paths')
+        session_id:     Used for output subfolder naming
+    Returns:
+        List of Path objects for generated chart PNGs.
+    """
+    if not HAS_MPL:
+        return []
+    out_dir = CHART_DIR / f'{session_id}_followup'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    chart_paths = []
+    for i, req in enumerate(chart_requests):
+        chart_type = req.get('type', '').lower()
+        filename   = req.get('file', '')
+        title      = req.get('title', f'Chart {i+1}')
+        safe       = re.sub(r'[^a-zA-Z0-9_]', '_', f'{filename}_{chart_type}_{i}')
+        df, kind = _load_dataframe(filename, session)
+        if df is None:
+            continue
+        try:
+            if chart_type == 'histogram':
+                col = req.get('column', '')
+                p = _fu_histogram(df, col, title, out_dir, safe)
+            elif chart_type == 'boxplot':
+                col = req.get('column', '')
+                p = _fu_boxplot(df, col, title, out_dir, safe)
+            elif chart_type == 'bar':
+                col = req.get('column', '')
+                p = _fu_bar(df, col, title, out_dir, safe)
+            elif chart_type == 'timeseries':
+                p = _fu_timeseries(df, req.get('x',''), req.get('y',''), title, out_dir, safe)
+            elif chart_type == 'scatter':
+                p = _fu_scatter(df, req.get('x',''), req.get('y',''), title, out_dir, safe)
+            elif chart_type == 'correlation_heatmap':
+                p = _fu_correlation_heatmap(df, title, out_dir, safe)
+            elif chart_type == 'spatial':
+                p = _fu_spatial(df, req.get('lat',''), req.get('lon',''), title, out_dir, safe)
+            else:
+                continue
+            if p:
+                chart_paths.append(p)
+        except Exception:
+            continue  # skip failed charts, don't crash the response
+    return chart_paths
+# ── Individual follow-up chart functions ──────────────────────────────────────
+def _fu_histogram(df, column: str, title: str, out_dir: Path, safe: str):
+    if column not in df.columns:
+        return None
+    s = pd.to_numeric(df[column], errors='coerce').dropna()
+    if len(s) < 2:
+        return None
+    fig, ax = plt.subplots(figsize=(6, 3.5))
+    ax.hist(s, bins=min(30, max(5, len(s)//5)), color=ACCENT, alpha=0.85, edgecolor=BG_COLOR)
+    ax.set_xlabel(column, fontsize=8)
+    ax.set_ylabel('Count', fontsize=8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_boxplot(df, column: str, title: str, out_dir: Path, safe: str):
+    if column not in df.columns:
+        return None
+    s = pd.to_numeric(df[column], errors='coerce').dropna()
+    if len(s) < 4:
+        return None
+    fig, ax = plt.subplots(figsize=(4, 4))
+    bp = ax.boxplot(s, patch_artist=True, medianprops={'color': TEXT_COLOR, 'linewidth': 2})
+    bp['boxes'][0].set_facecolor(ACCENT)
+    bp['boxes'][0].set_alpha(0.75)
+    ax.set_ylabel(column, fontsize=8)
+    ax.set_xticklabels([column[:20]])
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_bar(df, column: str, title: str, out_dir: Path, safe: str):
+    if column not in df.columns:
+        return None
+    vc = df[column].value_counts().head(15)
+    if vc.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(6, max(3, len(vc) * 0.32)))
+    ax.barh([str(k)[:30] for k in vc.index], vc.values, color=ACCENT, alpha=0.85)
+    ax.set_xlabel('Count', fontsize=8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_timeseries(df, x_col: str, y_col: str, title: str, out_dir: Path, safe: str):
+    if x_col not in df.columns or y_col not in df.columns:
+        return None
+    sub = df[[x_col, y_col]].copy()
+    sub[y_col] = pd.to_numeric(sub[y_col], errors='coerce')
+    sub = sub.dropna(subset=[y_col]).sort_values(x_col)
+    if len(sub) < 2:
+        return None
+    fig, ax = plt.subplots(figsize=(7, 3.5))
+    ax.plot(range(len(sub)), sub[y_col].values, color=ACCENT, linewidth=1.5, marker='o', markersize=3)
+    step = max(1, len(sub) // 8)
+    ax.set_xticks(range(0, len(sub), step))
+    ax.set_xticklabels([str(v)[:12] for v in sub[x_col].values[::step]], rotation=30, ha='right', fontsize=7)
+    ax.set_ylabel(y_col, fontsize=8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_scatter(df, x_col: str, y_col: str, title: str, out_dir: Path, safe: str):
+    if x_col not in df.columns or y_col not in df.columns:
+        return None
+    sub = df[[x_col, y_col]].apply(pd.to_numeric, errors='coerce').dropna()
+    if len(sub) < 3:
+        return None
+    fig, ax = plt.subplots(figsize=(5.5, 4))
+    ax.scatter(sub[x_col], sub[y_col], color=ACCENT, alpha=0.6, s=18, edgecolors='none')
+    ax.set_xlabel(x_col, fontsize=8)
+    ax.set_ylabel(y_col, fontsize=8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_correlation_heatmap(df, title: str, out_dir: Path, safe: str):
+    num_df = df.select_dtypes(include='number').dropna(axis=1, how='all')
+    cols = num_df.columns.tolist()[:12]
+    if len(cols) < 2:
+        return None
+    corr = num_df[cols].corr()
+    fig, ax = plt.subplots(figsize=(max(4, len(cols) * 0.6), max(3.5, len(cols) * 0.55)))
+    import numpy as np
+    im = ax.imshow(corr.values, cmap='RdYlGn', vmin=-1, vmax=1, aspect='auto')
+    ax.set_xticks(range(len(cols)))
+    ax.set_yticks(range(len(cols)))
+    ax.set_xticklabels([c[:12] for c in cols], rotation=40, ha='right', fontsize=7)
+    ax.set_yticklabels([c[:12] for c in cols], fontsize=7)
+    for i in range(len(cols)):
+        for j in range(len(cols)):
+            ax.text(j, i, f'{corr.values[i, j]:.2f}', ha='center', va='center',
+                    fontsize=6, color='white' if abs(corr.values[i,j]) > 0.5 else TEXT_COLOR)
+    plt.colorbar(im, ax=ax, shrink=0.8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_spatial(df, lat_col: str, lon_col: str, title: str, out_dir: Path, safe: str):
+    # Works with both GeoDataFrames and regular DataFrames with lat/lon columns
+    try:
+        import geopandas as gpd
+        if hasattr(df, 'geometry'):
+            # GeoDataFrame: extract centroid coords
+            pts = df[df.geometry.geom_type == 'Point']
+            if pts.empty:
+                pts = df.copy()
+                pts['_lon'] = df.geometry.centroid.x
+                pts['_lat'] = df.geometry.centroid.y
+                lon_col, lat_col = '_lon', '_lat'
+            else:
+                pts = pts.copy()
+                pts['_lon'] = pts.geometry.x
+                pts['_lat'] = pts.geometry.y
+                lon_col, lat_col = '_lon', '_lat'
+            df = pts
+    except ImportError:
+        pass
+    if lat_col not in df.columns or lon_col not in df.columns:
+        return None
+    sub = df[[lon_col, lat_col]].apply(pd.to_numeric, errors='coerce').dropna()
+    if len(sub) < 1:
+        return None
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))
+    ax.scatter(sub[lon_col], sub[lat_col], color=ACCENT, alpha=0.65, s=20, edgecolors='none')
+    ax.set_xlabel('Longitude / X', fontsize=8)
+    ax.set_ylabel('Latitude / Y', fontsize=8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+
+def _load_dataframe(filename: str, session: dict):
+    """
+    Reload a DataFrame from the original file path stored in the session.
+    Returns (df, kind) where kind is 'tabular' or 'geospatial'.
+    Returns (None, None) if the file cannot be loaded.
+    """
+    file_paths = session.get('file_paths', {})
+    path_str = file_paths.get(filename)
+    if not path_str:
+        return None, None
+    path = Path(path_str)
+    if not path.exists():
+        return None, None
+    ext = path.suffix.lower()
+    try:
+        if ext in ('.csv', '.txt'):
+            return pd.read_csv(path, low_memory=False), 'tabular'
+        elif ext in ('.xlsx', '.xls'):
+            return pd.read_excel(path), 'tabular'
+        elif ext in ('.geojson', '.json', '.shp'):
+            import geopandas as gpd
+            return gpd.read_file(path), 'geospatial'
+    except Exception:
+        return None, None
+    return None, None
+def generate_followup_charts(
+    chart_requests: list,
+    session: dict,
+    session_id: str,
+) -> list:
+    """
+    Generate charts from structured CHART_REQUEST dicts produced by followup.py.
+    Returns list of Path objects for generated PNGs.
+    """
+    if not HAS_MPL:
+        return []
+    out_dir = CHART_DIR / f'{session_id}_followup'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    chart_paths = []
+    for i, req in enumerate(chart_requests):
+        chart_type = req.get('type', '').lower()
+        filename   = req.get('file', '')
+        title      = req.get('title', f'Chart {i + 1}')
+        safe       = re.sub(r'[^a-zA-Z0-9_]', '_', f'{filename}_{chart_type}_{i}')
+        # Inline data charts don't need file loading
+        if chart_type == '_grouped_bar_inline':
+            try:
+                p = _fu_grouped_bar_inline(req, out_dir, safe)
+                if p:
+                    chart_paths.append(p)
+            except Exception:
+                pass
+            continue
+        df, kind = _load_dataframe(filename, session)
+        if df is None:
+            continue
+        try:
+            p = None
+            if chart_type == 'histogram':
+                p = _fu_histogram(df, req.get('column', ''), title, out_dir, safe)
+            elif chart_type == 'boxplot':
+                p = _fu_boxplot(df, req.get('column', ''), title, out_dir, safe)
+            elif chart_type == 'bar':
+                p = _fu_bar(df, req.get('column', ''), title, out_dir, safe)
+            elif chart_type == 'timeseries':
+                p = _fu_timeseries(df, req.get('x', ''), req.get('y', ''), title, out_dir, safe)
+            elif chart_type == 'scatter':
+                p = _fu_scatter(df, req.get('x', ''), req.get('y', ''), title, out_dir, safe)
+            elif chart_type == 'correlation_heatmap':
+                p = _fu_correlation_heatmap(df, title, out_dir, safe)
+            elif chart_type == 'spatial':
+                p = _fu_spatial(df, req.get('lat', ''), req.get('lon', ''), title, out_dir, safe)
+            if p:
+                chart_paths.append(p)
+        except Exception:
+            continue
+    return chart_paths
+# ── Individual follow-up chart functions ──────────────────────────────────────
+def _fu_histogram(df, column, title, out_dir, safe):
+    if column not in df.columns:
+        return None
+    s = pd.to_numeric(df[column], errors='coerce').dropna()
+    if len(s) < 2:
+        return None
+    fig, ax = plt.subplots(figsize=(6, 3.5))
+    ax.hist(s, bins=min(30, max(5, len(s) // 5)), color=ACCENT, alpha=0.85, edgecolor=BG_COLOR)
+    ax.set_xlabel(column, fontsize=8)
+    ax.set_ylabel('Count', fontsize=8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_boxplot(df, column, title, out_dir, safe):
+    if column not in df.columns:
+        return None
+    s = pd.to_numeric(df[column], errors='coerce').dropna()
+    if len(s) < 4:
+        return None
+    fig, ax = plt.subplots(figsize=(4, 4))
+    bp = ax.boxplot(s, patch_artist=True, medianprops={'color': TEXT_COLOR, 'linewidth': 2})
+    bp['boxes'][0].set_facecolor(ACCENT)
+    bp['boxes'][0].set_alpha(0.75)
+    ax.set_ylabel(column, fontsize=8)
+    ax.set_xticklabels([column[:20]])
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_bar(df, column, title, out_dir, safe):
+    if column not in df.columns:
+        return None
+    vc = df[column].value_counts().head(15)
+    if vc.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(6, max(3, len(vc) * 0.32)))
+    ax.barh([str(k)[:30] for k in vc.index], vc.values, color=ACCENT, alpha=0.85)
+    ax.set_xlabel('Count', fontsize=8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_timeseries(df, x_col, y_col, title, out_dir, safe):
+    if x_col not in df.columns or y_col not in df.columns:
+        return None
+    sub = df[[x_col, y_col]].copy()
+    sub[y_col] = pd.to_numeric(sub[y_col], errors='coerce')
+    sub = sub.dropna(subset=[y_col]).sort_values(x_col)
+    if len(sub) < 2:
+        return None
+    fig, ax = plt.subplots(figsize=(7, 3.5))
+    ax.plot(range(len(sub)), sub[y_col].values, color=ACCENT,
+            linewidth=1.5, marker='o', markersize=3)
+    step = max(1, len(sub) // 8)
+    ax.set_xticks(range(0, len(sub), step))
+    ax.set_xticklabels(
+        [str(v)[:12] for v in sub[x_col].values[::step]],
+        rotation=30, ha='right', fontsize=7,
+    )
+    ax.set_ylabel(y_col, fontsize=8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_scatter(df, x_col, y_col, title, out_dir, safe):
+    if x_col not in df.columns or y_col not in df.columns:
+        return None
+    sub = df[[x_col, y_col]].apply(pd.to_numeric, errors='coerce').dropna()
+    if len(sub) < 3:
+        return None
+    fig, ax = plt.subplots(figsize=(5.5, 4))
+    ax.scatter(sub[x_col], sub[y_col], color=ACCENT, alpha=0.6, s=18, edgecolors='none')
+    ax.set_xlabel(x_col, fontsize=8)
+    ax.set_ylabel(y_col, fontsize=8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_correlation_heatmap(df, title, out_dir, safe):
+    import numpy as np
+    num_df = df.select_dtypes(include='number').dropna(axis=1, how='all')
+    cols = num_df.columns.tolist()[:12]
+    if len(cols) < 2:
+        return None
+    corr = num_df[cols].corr()
+    fig, ax = plt.subplots(figsize=(max(4, len(cols) * 0.65), max(3.5, len(cols) * 0.6)))
+    im = ax.imshow(corr.values, cmap='RdYlGn', vmin=-1, vmax=1, aspect='auto')
+    ax.set_xticks(range(len(cols)))
+    ax.set_yticks(range(len(cols)))
+    ax.set_xticklabels([c[:12] for c in cols], rotation=40, ha='right', fontsize=7)
+    ax.set_yticklabels([c[:12] for c in cols], fontsize=7)
+    for i in range(len(cols)):
+        for j in range(len(cols)):
+            ax.text(j, i, f'{corr.values[i, j]:.2f}', ha='center', va='center',
+                    fontsize=6,
+                    color='white' if abs(corr.values[i, j]) > 0.5 else TEXT_COLOR)
+    plt.colorbar(im, ax=ax, shrink=0.8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_spatial(df, lat_col, lon_col, title, out_dir, safe):
+    try:
+        if hasattr(df, 'geometry'):
+            pts = df.copy()
+            pts['_lon'] = df.geometry.centroid.x
+            pts['_lat'] = df.geometry.centroid.y
+            lon_col, lat_col = '_lon', '_lat'
+            df = pts
+    except Exception:
+        pass
+    if lat_col not in df.columns or lon_col not in df.columns:
+        return None
+    sub = df[[lon_col, lat_col]].apply(pd.to_numeric, errors='coerce').dropna()
+    if sub.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))
+    ax.scatter(sub[lon_col], sub[lat_col], color=ACCENT, alpha=0.65, s=20, edgecolors='none')
+    ax.set_xlabel('Longitude / X', fontsize=8)
+    ax.set_ylabel('Latitude / Y', fontsize=8)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p
+def _fu_grouped_bar_inline(req: dict, out_dir: Path, safe: str):
+    """Render a grouped bar chart from inline parsed data (no file needed)."""
+    import numpy as np
+    categories = req.get('categories', [])
+    series     = req.get('series', {})
+    title      = req.get('title', 'Chart')
+    x_label    = req.get('x_label', '')
+    y_label    = req.get('y_label', '')
+    if not categories or not series:
+        return None
+    n_cats   = len(categories)
+    n_series = len(series)
+    x        = np.arange(n_cats)
+    width    = 0.8 / n_series
+    colors   = [ACCENT, '#2d7a55', '#e05050', '#5080e0', '#e0a030']
+    fig, ax  = plt.subplots(figsize=(max(5, n_cats * 1.2), 4))
+    for i, (sname, vals) in enumerate(series.items()):
+        offset = (i - n_series / 2 + 0.5) * width
+        ax.bar(x + offset, vals[:n_cats], width,
+               label=sname, color=colors[i % len(colors)], alpha=0.85)
+    ax.set_xticks(x)
+    ax.set_xticklabels([c[:18] for c in categories], fontsize=8)
+    ax.set_xlabel(x_label, fontsize=8)
+    ax.set_ylabel(y_label, fontsize=8)
+    ax.legend(fontsize=7, facecolor=BG_COLOR, labelcolor=TEXT_COLOR)
+    _apply_style(ax, title)
+    plt.tight_layout()
+    p = out_dir / f'{safe}.png'
+    fig.savefig(p, dpi=120, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.close(fig)
+    return p

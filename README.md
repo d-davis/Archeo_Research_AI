@@ -14,16 +14,16 @@ An on-premises, multi-model pipeline for analyzing geospatial, tabular, imagery,
 6. [Ollama Setup](#ollama-setup)
 7. [Model Selection by Hardware Tier](#model-selection-by-hardware-tier)
 8. [Project Structure](#project-structure)
-9. [Usage: GUI](#usage-gui)
-10. [Usage: CLI](#usage-cli)
-11. [CLI Reference](#cli-reference)
-12. [How It Works](#how-it-works)
-13. [Sessions and Interactive Mode](#sessions-and-interactive-mode)
-14. [Charts and Visualizations](#charts-and-visualizations)
-15. [Output Format](#output-format)
-16. [Troubleshooting](#troubleshooting)
-17. [Build Phases](#build-phases)
-
+9. [Analytics Module](#analytics-module)
+10. [Usage: GUI](#usage-gui)
+11. [Usage: CLI](#usage-cli)
+12. [CLI Reference](#cli-reference)
+13. [How It Works](#how-it-works)
+14. [Sessions and Interactive Mode](#sessions-and-interactive-mode)
+15. [Charts and Visualizations](#charts-and-visualizations)
+16. [Output Format](#output-format)
+17. [Troubleshooting](#troubleshooting)
+18. [Build Phases](#build-phases)
 ---
 
 ## Overview
@@ -53,6 +53,8 @@ Core design principles:
 | Imagery     | `.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg` |
 | Document    | `.pdf`                                   |
 | Archive     | `.zip` (GUI only -- for shapefile bundles and multi-file uploads) |
+
+**Note on images containing text (tables, forms, scanned records):** The vision model describes image content but is not a reliable OCR engine. Images where the primary analytical value is textual (e.g., tables saved as PNG, scanned field forms, annotated maps with dense labelling) should be converted to text first using a dedicated OCR tool such as GitHubtesseract-ocr/tesseract (free, open-source) or GitHubJaidedAI/EasyOCR (pip-installable, GPU-accelerated). Save the extracted text as a .txt file and upload that alongside or instead of the image for accurate content interpretation.
 
 **Note on shapefiles:** A shapefile is a bundle of files. In the CLI, pass the `.shp` directly with `.dbf`, `.shx`, and `.prj` in the same folder. In the GUI, ZIP all four files together and upload the ZIP.
 
@@ -95,8 +97,8 @@ conda install -c conda-forge geopandas rasterio pyproj shapely
 
 ```bash
 pip install ollama pandas openpyxl tiktoken rich requests Pillow \
-            pymupdf pymupdf4llm \
-            streamlit matplotlib
+    pymupdf pymupdf4llm scipy \
+    streamlit matplotlib
 ```
 
 ### Step 5: (Optional) Install PyTorch for CLIP semantic embeddings
@@ -136,7 +138,7 @@ Use this path only if you cannot use conda. GDAL must be installed at the system
 brew install gdal
 pip install GDAL==$(gdal-config --version) geopandas rasterio
 pip install ollama pandas openpyxl tiktoken rich requests Pillow \
-            pymupdf pymupdf4llm streamlit matplotlib
+            pymupdf pymupdf4llm streamlit matplotlib scipy
 ```
 
 ### Ubuntu / Debian
@@ -146,7 +148,7 @@ sudo apt-get update
 sudo apt-get install -y gdal-bin libgdal-dev python3-gdal
 pip install GDAL==$(gdal-config --version) geopandas rasterio
 pip install ollama pandas openpyxl tiktoken rich requests Pillow \
-            pymupdf pymupdf4llm streamlit matplotlib
+            pymupdf pymupdf4llm streamlit matplotlib scipy
 ```
 
 ### Windows (pip only, not recommended)
@@ -161,7 +163,7 @@ https://github.com/cgohlke/geospatial-wheels/releases
 pip install GDAL-<version>-cp311-cp311-win_amd64.whl
 pip install geopandas rasterio
 pip install ollama pandas openpyxl tiktoken rich requests Pillow \
-            pymupdf pymupdf4llm streamlit matplotlib
+            pymupdf pymupdf4llm streamlit matplotlib scipy
 ```
 
 ---
@@ -226,6 +228,7 @@ archaeo_ai/
 ├── main.py                     CLI entry point and interactive loop
 ├── config.py                   Hardware detection and model tier configuration
 ├── context_assembly.py         Token budget management and context packaging
+├── analytics.py        			Pre-computation analytics engine (descriptive stats, normality, correlations, outliers, geospatial metrics)
 ├── output.py                   Report formatting, file export, supplementary append
 ├── session.py                  Session creation, save/load, rolling summary
 ├── visualize.py                Chart generation from preprocessed summaries
@@ -355,6 +358,7 @@ python main.py --resume sessions/site_42_initial.json
 
 - **Tabular** (CSV, XLSX, TXT): Schema, statistics, value frequencies, 5-row sample, coordinate and temporal column detection.
 - **Geospatial** (SHP, GeoJSON): CRS, geometry types, feature count, bounding box, attribute schema, archaeological column heuristics.
+- **Analytics** (`analytics.py`): After each tabular or geospatial file is preprocessed, a full statistical suite runs in Python before the LLM sees the data. Results are injected into the Phase 1 context as pre-verified facts. Includes: descriptive statistics (mean, median, SD, IQR, skewness, kurtosis), Shapiro-Wilk normality testing, Z-score and Tukey fence outlier detection, rate of change, column ratios, Pearson and Spearman correlation, cross-tabulation, linear trend (slope, R², p-value), and for geospatial layers: feature density, bounding box area, and mean nearest-neighbour distance for point features.
 - **Imagery** (TIF, PNG, JPEG): Per-band or per-channel statistics, resolution, CRS for rasters, base64 thumbnail for vision model.
 - **PDF:** `pymupdf4llm.to_markdown()` converts the full document to Markdown including pipe-delimited tables. Embedded figures extracted via pymupdf and processed through imagery pipeline.
 
@@ -406,6 +410,7 @@ Auto-generated from preprocessed summaries using matplotlib. Saved to `./output/
 | Standard image  | Per-channel distribution (R/G/B)                                 |
 | PDF             | Word count and page count bars                                   |
 
+Follow-up charts are generated on demand during conversation (Tab 2 / interactive mode). Unlike session charts above, follow-up charts are produced in response to specific analytical questions and reflect exactly what the LLM determined was most useful to visualize. They are saved to ./output/charts/<session_id>_followup/.
 ---
 
 ## Output Format
@@ -444,11 +449,18 @@ Run: `ollama serve`
 ### "geopandas not installed" or GDAL errors
 Run: `conda install -c conda-forge geopandas rasterio`
 
+### "scipy not installed" or analytics not computing
+Run: `pip install scipy>=1.11`
+Shapiro-Wilk normality testing, Pearson/Spearman correlations, and linear trend analysis all require scipy. The system will warn on startup if it is missing and skip those analytics gracefully.
+
 ### Vision model not found
 Pull it: `ollama pull llava:7b` (low/CPU) or `ollama pull llama3.2-vision:11b` (mid/high)
 
 ### "pymupdf4llm not installed"
 Run: `pip install pymupdf4llm`
+
+### Text in imagery not being read
+The vision model (LLaVA, Llama 3.2 Vision) describes visual content but is not a reliable OCR engine. Images containing primarily text — tables, scanned forms, annotated maps — should be pre-processed with a dedicated OCR tool before upload. Recommended options: GitHubtesseract-ocr/tesseract (requires OS-level install; pip install pytesseract) or GitHubJaidedAI/EasyOCR (pip install easyocr, no external install needed, downloads model weights on first run). Save OCR output as .txt and upload that file instead.
 
 ### PDF tables not being read
 Check `TEXT_CHAR_LIMIT` in `pdf.py`. The notes field in `--verbose` output shows what percentage of the document was passed. Increase the limit for longer documents.
@@ -489,6 +501,7 @@ Override to a smaller model: `--model llama3.1:8b-instruct-q4_K_M`
 | 3.5   | Complete | Interactive follow-up loop, session persistence, resume with delta synthesis              |
 | 3.6   | Complete | PDF ingestion via pymupdf4llm (Markdown + tables + embedded figures)                     |
 | 4     | Complete | Streamlit web GUI (app.py), automatic chart generation (visualize.py), ZIP upload support|
+| 4.1   | Complete | Pre-computation analytics engine (analytics.py): descriptive stats, normality, outliers, correlations, trends, geospatial metrics |
 
 ---
 

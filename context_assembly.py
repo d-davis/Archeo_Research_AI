@@ -67,7 +67,7 @@ def _trim_summary(summary: dict, token_budget: int) -> dict:
       categorical_summary -> sample_rows -> notes -> numeric_summary
     Core fields (filename, shape, data_type, columns) are never dropped.
     """
-    drop_order = ['categorical_summary', 'sample_rows', 'notes', 'numeric_summary']
+    drop_order = ['analytics', 'categorical_summary', 'sample_rows', 'notes', 'numeric_summary']
     result = dict(summary)
     result['_trimmed'] = True
     for field in drop_order:

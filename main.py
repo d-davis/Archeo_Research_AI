@@ -323,7 +323,7 @@ def interactive_loop(session, model_config, args, session_path):
         with Progress(SpinnerColumn(), TextColumn('[progress.description]{task.description}'),
                       console=console) as prog:
             task = prog.add_task('  Generating answer...', total=None)
-            answer = run_followup(question=question, session=session)
+            answer, followup_charts = run_followup(question=question, session=session)
             prog.remove_task(task)
         if not args.no_critique:
             with Progress(SpinnerColumn(), TextColumn('[progress.description]{task.description}'),

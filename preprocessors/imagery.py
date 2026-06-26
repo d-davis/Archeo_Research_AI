@@ -139,6 +139,11 @@ def _summarize_raster(path: Path) -> dict:
 
     size_mb = path.stat().st_size / (1024 * 1024)
     base['notes'].append(f'File size: {size_mb:.1f} MB')
+    # Generate thumbnail for vision model
+    try:
+        base['_thumbnail_b64'] = _raster_to_b64(path)
+    except Exception:
+        base['_thumbnail_b64'] = None
     return base
 
 
@@ -146,8 +151,8 @@ def _raster_to_b64(path: Path) -> str:
     """Render first 3 bands to a normalized RGB thumbnail, return as base64 JPEG."""
     with rasterio.open(path) as src:
         n = min(src.count, 3)
-        out_h = min(512, src.height)
-        out_w = min(512, src.width)
+        out_h = min(1024, src.height)
+        out_w = min(1024, src.width)
         data = src.read(
             list(range(1, n + 1)),
             out_shape=(n, out_h, out_w),
@@ -203,6 +208,11 @@ def _summarize_standard_image(path: Path) -> dict:
 
     size_mb = path.stat().st_size / (1024 * 1024)
     base['notes'].append(f'File size: {size_mb:.2f} MB')
+    # Generate thumbnail for vision model
+    try:
+        base['_thumbnail_b64'] = _standard_to_b64(path)
+    except Exception:
+        base['_thumbnail_b64'] = None
     return base
 
 
@@ -236,6 +246,7 @@ def _base_summary(path: Path, data_type: str) -> dict:
         'band_stats':          {},
         'channel_stats':       {},
         'vision_description':  None,  # populated by main.py after vision model call
+        '_thumbnail_b64': None,
         'columns':             [],
         'numeric_summary':     {},
         'categorical_summary': {},

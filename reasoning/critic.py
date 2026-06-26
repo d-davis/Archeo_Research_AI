@@ -44,6 +44,13 @@ Evaluate the report against this rubric:
    Flag claims where the supporting data source is unclear.
 
 IMPORTANT: Do not flag well-supported, appropriately hedged claims.
+Do NOT flag statements that are explicitly framed as hypotheses, speculative
+interpretations, or potential research directions. Phrases such as "may suggest",
+"could indicate", "one possible interpretation", "warrants further investigation",
+"raises the question of", "tentatively suggests", or similar hedging language
+indicate the author is appropriately signalling uncertainty. These are analytically
+valuable and must be preserved intact.
+Only flag statements that make unhedged factual assertions not grounded in the data.
 Reserve flags for genuine problems. Aim for 2-6 flags per report.
 
 Respond in valid JSON using this exact schema:

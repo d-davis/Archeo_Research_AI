@@ -10,6 +10,7 @@ archaeological survey data and flag them in notes.
 from pathlib import Path
 from typing import Union
 import pandas as pd
+from analytics import run_tabular_analytics
 
 
 def preprocess_tabular(file_path: Union[str, Path]) -> dict:
@@ -114,6 +115,7 @@ def _summarize_dataframe(df: pd.DataFrame, path: Path) -> dict:
     if date_cols:
         summary['notes'].append(f"Temporal columns detected: {date_cols}")
 
+    summary['analytics'] = run_tabular_analytics(df)
     return summary
 
 

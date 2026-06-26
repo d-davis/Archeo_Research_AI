@@ -244,6 +244,12 @@ with tab1:
               'tif','tiff','png','jpg','jpeg','pdf','zip'],
     )
 
+    st.caption(
+    "⚠️ Images containing primarily text (tables, scanned forms, annotated maps) "
+    "should be pre-processed with an OCR tool (e.g. Tesseract or EasyOCR) and "
+    "uploaded as .txt files. The vision model describes visual content but is not "
+    "a reliable text extractor."
+    )
     prompt = st.text_area('Research question',
                           placeholder='What patterns in this data suggest habitation activity?',
                           height=80)
@@ -307,6 +313,7 @@ with tab1:
                         final_narrative=narrative,
                         critique_result=critique,
                         session_name=session_name or None,
+                        file_paths={f.name: str(p) for f, p in zip(uploaded, saved_paths)},
                     )
                     session_path = save_session(session)
 
@@ -390,7 +397,7 @@ with tab2:
                             session = st.session_state._session_cache
                         add_turn(session, 'user', question)
 
-                        answer = run_followup(question=question, session=session)
+                        answer, followup_charts = run_followup(question=question, session=session)
 
                         if not st.session_state.no_critique:
                             critique = run_critique(
@@ -414,6 +421,12 @@ with tab2:
                         save_session(session)
 
                         st.markdown(answer)
+                        # Display any charts returned by follow-up
+                        if followup_charts:
+                            cols = st.columns(min(2, len(followup_charts)))
+                            for idx, cp in enumerate(followup_charts):
+                                if Path(cp).exists():
+                                    cols[idx % 2].image(str(cp), use_container_width=True)
                         st.session_state.chat_history.append({'role': 'assistant', 'content': answer})
 
                     except Exception as e:

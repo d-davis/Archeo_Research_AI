@@ -20,6 +20,7 @@ try:
 except ImportError:
     HAS_GEOPANDAS = False
 
+from analytics import run_geospatial_analytics
 
 def preprocess_geospatial(file_path: Union[str, Path]) -> dict:
     """Load and summarize a geospatial file. Returns structured summary dict."""
@@ -162,6 +163,7 @@ def _summarize_geodataframe(gdf, path: Path) -> dict:
     if coord_cols:
         summary['notes'].append(f'Coordinate attribute columns detected: {coord_cols}')
 
+    summary['analytics'] = run_geospatial_analytics(gdf)
     return summary
 
 
