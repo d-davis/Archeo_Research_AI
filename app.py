@@ -82,12 +82,12 @@ def classify_file(path: Path) -> str:
 
 
 def save_uploaded(uploaded_file) -> Path:
-    """Save a Streamlit UploadedFile to a temp path and return it."""
-    suffix = Path(uploaded_file.name).suffix
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(uploaded_file.read())
-    tmp.close()
-    return Path(tmp.name)
+    """Save to a persistent session uploads folder, preserving original filename."""
+    uploads_dir = Path('./uploads')
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    path = uploads_dir / uploaded_file.name
+    path.write_bytes(uploaded_file.read())
+    return path
 
 
 def preprocess_all(saved_paths, model_config, no_vision, keep_figures, log):
@@ -102,12 +102,27 @@ def preprocess_all(saved_paths, model_config, no_vision, keep_figures, log):
                 found, extract_dir = extract_zip(str(path))
                 zip_dirs.append(extract_dir)
                 if found:
-                    log.append(f'  Extracted: {", ".join(f.name for f in found)}')
-                    expanded.extend(found)
+                    log.append(f' Extracted: {", ".join(f.name for f in found)}')
+                    # Copy extracted files to uploads/ for persistent access
+                    uploads_dir = Path('./uploads')
+                    uploads_dir.mkdir(parents=True, exist_ok=True)
+                    all_files_in_zip = list(Path(extract_dir).rglob('*'))
+                    for f in all_files_in_zip:
+                        if f.is_file():
+                            dest = uploads_dir / f.name
+                            dest.write_bytes(f.read_bytes())
+
+                    # Only add supported file types to the processing queue
+                    persistent_found = []
+                    for f in found:
+                        dest = uploads_dir / f.name
+                        st.session_state.setdefault('_zip_extracted_paths', {})[f.name] = str(dest)
+                        persistent_found.append(dest)
+                    expanded.extend(persistent_found)
                 else:
-                    log.append(f'  No supported files in {path.name}')
+                    log.append(f' No supported files in {path.name}')
             except Exception as e:
-                log.append(f'  ZIP error: {e}')
+                log.append(f' ZIP error: {e}')
         else:
             expanded.append(path)
 
@@ -313,7 +328,10 @@ with tab1:
                         final_narrative=narrative,
                         critique_result=critique,
                         session_name=session_name or None,
-                        file_paths={f.name: str(p) for f, p in zip(uploaded, saved_paths)},
+                        file_paths={
+                        **{f.name: str(p) for f, p in zip(uploaded, saved_paths)},
+                        **st.session_state.pop('_zip_extracted_paths', {}),
+                    },
                     )
                     session_path = save_session(session)
 
@@ -343,7 +361,7 @@ with tab1:
                 cols = st.columns(2)
                 for i, cp in enumerate(charts):
                     if Path(cp).exists():
-                        cols[i % 2].image(cp, use_container_width=True)
+                        cols[i % 2].image(cp, width='stretch')
             else:
                 st.info('No charts generated for these file types.')
 
@@ -398,7 +416,7 @@ with tab2:
                         add_turn(session, 'user', question)
 
                         answer, followup_charts = run_followup(question=question, session=session)
-
+                          
                         if not st.session_state.no_critique:
                             critique = run_critique(
                                 narrative=answer,
@@ -426,7 +444,7 @@ with tab2:
                             cols = st.columns(min(2, len(followup_charts)))
                             for idx, cp in enumerate(followup_charts):
                                 if Path(cp).exists():
-                                    cols[idx % 2].image(str(cp), use_container_width=True)
+                                    cols[idx % 2].image(str(cp), width='stretch')
                         st.session_state.chat_history.append({'role': 'assistant', 'content': answer})
 
                     except Exception as e:
@@ -552,4 +570,4 @@ with tab3:
             cols = st.columns(2)
             for i, cp in enumerate(st.session_state.chart_paths):
                 if Path(cp).exists():
-                    cols[i % 2].image(cp, use_container_width=True)
+                    cols[i % 2].image(cp, width='stretch')

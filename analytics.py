@@ -103,6 +103,32 @@ def _detect_order_col(df: pd.DataFrame) -> str | None:
             return matches[0]
     return None
 
+def _grouped_aggregations(df: pd.DataFrame) -> dict:
+    """
+    For each categorical column, compute sum and mean of all numeric columns
+    grouped by that category. Reveals actual totals per group rather than
+    just row counts — critical for trend analysis.
+    """
+    out = {}
+    num_cols = _num_cols(df)
+    if not num_cols:
+        return out
+    cat_cols = [
+        c for c in df.select_dtypes(include=['object', 'category']).columns
+        if df[c].nunique() <= 10
+    ]
+    for cat_col in cat_cols[:3]:
+        try:
+            grouped = df.groupby(cat_col)[num_cols].agg(['sum', 'mean', 'count'])
+            grouped.columns = ['_'.join(c) for c in grouped.columns]
+            result = {}
+            for group_val, row in list(grouped.iterrows())[:10]:
+                result[str(group_val)] = {k: _f(v) for k, v in row.items()}
+            out[cat_col] = result
+        except Exception:
+            continue
+    return out
+
 
 # ---------------------------------------------------------------------------
 # 1. Descriptive statistics
@@ -126,6 +152,7 @@ def _descriptive(df: pd.DataFrame) -> dict:
             "mode":     _f(s.mode().iloc[0]) if not s.mode().empty else None,
             "std":      _f(s.std()),
             "variance": _f(s.var()),
+            "sum":      _f(s.sum()),
             "min":      _f(s.min()),
             "max":      _f(s.max()),
             "range":    _f(s.max() - s.min()),
@@ -472,6 +499,7 @@ def run_tabular_analytics(
         result["correlations"]      = _correlations(df)
         result["cross_tabulation"]  = _crosstab(df)
         result["linear_trend"]      = _linear_trend(df, order_col)
+        result["grouped_aggregations"] = _grouped_aggregations(df)
 
     return result
 

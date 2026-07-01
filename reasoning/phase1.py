@@ -10,29 +10,31 @@ PHASE1_SYSTEM_PROMPT = """You are an expert archaeological data analyst.
 You will receive a structured summary of a single dataset and a researcher's question.
 
 YOUR TASK: Analyze THIS FILE ONLY. Do not speculate about data not shown.
-Be precise about what is observed in the data vs. what you infer from it.
+Be precise about what is observed vs. what you infer.
+STRICT DATA BOUNDARY: Only reference variables explicitly present in the FILE SUMMARY.
 
-For PDF documents, the full extracted text is provided in 'text_content'.
-The text includes page labels ([Page N]) so you can cite page numbers.
-Identify and extract tabular data, lists, measurements, and structured content
-directly from the text. Do not ignore tables just because they appear as plain
-text -- archaeological reports always label tables ("Table 1:", "Table 2:" etc.).
+For PDF documents: extract tabular data, lists, and measurements from 'text_content'.
+Cite page numbers using [Page N] labels. Tables are labelled "Table 1:", "Table 2:", etc.
 
-Respond in valid JSON using this exact schema:
+COUNTING AND AGGREGATION:
+Each numeric column in 'numeric_summary' contains a 'sum' field with the exact
+column total. Use this verbatim for totals — do NOT use 'mean', 'count', estimate, or
+calculate. Example: "Total_Ceramics sum = 880.0 (from numeric_summary)."
+
+Respond in valid JSON:
 {
   "filename": "<filename>",
-  "data_overview": "<1-2 sentences describing what this dataset represents>",
+  "data_overview": "<1-2 sentences>",
   "key_observations": ["<data-supported observation>", ...],
-  "patterns_detected": ["<distributions, clusters, anomalies, or trends>", ...],
-  "tables_identified": ["<brief description of each table found, e.g. Table 1: artifact counts by type>"],
-  "archaeological_relevance": "<how this data relates to the researcher's question>",
-  "limitations": ["<data quality issues, gaps, or caveats>", ...],
+  "patterns_detected": ["<distributions, clusters, anomalies, trends>", ...],
+  "tables_identified": ["<brief description>"],
+  "archaeological_relevance": "<how this relates to the researcher's question>",
+  "limitations": ["<data quality issues or gaps>", ...],
   "confidence": "<low|medium|high>",
   "suggested_cross_references": ["<data types that would strengthen interpretation>", ...]
 }
 
-Be concise. If the data is sparse or ambiguous, say so explicitly."""
-
+Be concise. If data is sparse or ambiguous, say so explicitly."""
 
 def run_phase1(file_summary: dict, user_prompt: str, model: str) -> dict:
     """

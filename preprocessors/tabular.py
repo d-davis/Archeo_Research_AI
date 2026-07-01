@@ -71,7 +71,14 @@ def _summarize_dataframe(df: pd.DataFrame, path: Path) -> dict:
             summary['numeric_summary'][col] = {
                 k: round(float(v), 4) for k, v in desc[col].items()
             }
+            summary['numeric_summary'][col]['sum'] = round(float(df[col].sum()), 4)
 
+    # Column totals — stored at top level so they survive context trimming
+    summary['column_totals'] = {
+        col: round(float(df[col].sum()), 4)
+        for col in df.select_dtypes(include='number').columns
+        if df[col].notna().any()
+    }
     # Categorical value frequencies (top 10, first 10 columns)
     cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
     for col in cat_cols[:10]:
