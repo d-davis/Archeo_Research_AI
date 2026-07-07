@@ -15,6 +15,7 @@ Two-model architecture note:
   These are intentionally separate concerns.
 """
 import ollama
+from config import get_num_predict
 
 VISION_SYSTEM_PROMPT = """You are a visual pattern analyst. Your job is to describe
 what you observe in an image as objectively and precisely as possible.
@@ -42,6 +43,7 @@ def run_vision_description(
     user_prompt: str,
     model: str,
     filename: str = '',
+    tier: str = 'mid',
 ) -> str:
     """
     Submit a base64 image to a local Ollama vision model.
@@ -73,7 +75,11 @@ def run_vision_description(
                     'images':  [image_b64],
                 },
             ],
-            options={'temperature': 0.1},
+            options={
+                'temperature': 0.1,
+                'repeat_penalty': 1.15,
+                'num_predict': get_num_predict(tier, 'vision'),
+            },
         )
         return response['message']['content']
 

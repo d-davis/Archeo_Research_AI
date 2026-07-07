@@ -16,6 +16,7 @@ import ollama
 
 from session import get_history_text
 from visualize import generate_followup_charts
+from config import get_num_predict
 
 FOLLOWUP_SYSTEM_PROMPT = """You are an expert archaeological analyst in an ongoing research conversation.
 You have access to the original datasets (as structured summaries), the per-file Phase 1
@@ -61,6 +62,19 @@ Use the exact filename from FILES ANALYZED.
 Only request a chart when it genuinely adds analytical value."""
 
 
+FOLLOWUP_SYSTEM_PROMPT_CPU = """You are an expert archaeological analyst in an ongoing research conversation.
+You have access to the original datasets (as structured summaries), the final
+interpretation report, and the conversation history.
+
+RULES:
+1. Ground every answer in the provided data. Cite specific files when relevant.
+2. Be concise and focused. Follow-up answers are not full reports.
+3. If the question asks about something the available data cannot answer, say so clearly.
+4. If the user asks to add new data or restart the analysis, do not comply.
+   Instead, instruct them to start a new session with:
+   python main.py --resume <session_file.json> --files <new_files>
+5. Distinguish observation (what the data shows) from inference (what you conclude).
+6. Do not reproduce large portions of the original report unnecessarily."""
 # ── Helper: normalise loose JSON chart descriptions ───────────────────────────
 
 def _normalize_loose_chart(obj: dict, session: dict) -> dict | None:
@@ -250,6 +264,13 @@ def _infer_chart_from_prose(text: str, session: dict) -> dict | None:
     # KDE / spatial density
     if any(kw in text_lower for kw in ('kernel density', 'kde', 'density map',
                                         'heatmap', 'heat map')):
+        # Prefer shapefile/geojson for KDE over CSV
+        geo_files = [f for f in files if Path(f).suffix.lower() in ('.shp', '.geojson', '.json')]
+        if geo_files:
+            return {'type': 'kde_heatmap', 'file': geo_files[0],
+                    'lat': '', 'lon': '',
+                    'title': 'Kernel Density Estimation'}
+        # Fall back to CSV with lat/lon columns
         lat_col = next((c for c in known_cols
                         if any(h in c.lower() for h in ['lat', 'y', 'northing'])), None)
         lon_col = next((c for c in known_cols
@@ -258,10 +279,6 @@ def _infer_chart_from_prose(text: str, session: dict) -> dict | None:
             return {'type': 'kde_heatmap', 'file': file,
                     'lat': lat_col, 'lon': lon_col,
                     'title': 'Kernel Density Estimation'}
-        geo_files = [f for f in files if Path(f).suffix.lower() in ('.shp', '.geojson', '.json')]
-        if geo_files:
-            return {'type': 'geometry_plot', 'file': geo_files[0],
-                    'title': 'Spatial Distribution'}
 
     # Spatial / geographic
     if any(kw in text_lower for kw in ('spatial', 'geographic', 'map of',
@@ -311,144 +328,200 @@ def run_followup(question: str, session: dict) -> tuple[str, list]:
     Answer a follow-up question using full session context.
     Returns (answer_text, chart_paths).
     """
-    file_summaries_str = json.dumps(
-        session.get('preprocessed_summaries', []), indent=2, default=str)
-    phase1_str = json.dumps(
-        session.get('phase1_results', []), indent=2, default=str)
+    tier = session.get('tier', 'mid')
     history_text = get_history_text(session)
 
-    col_info = '\n'.join(
-        f'  {fs["filename"]}: ' +
-        ', '.join(f'{c["name"]} ({c["dtype"]})' for c in fs.get('columns', [])
-                  if isinstance(c, dict) and 'name' in c)
-        for fs in session.get('preprocessed_summaries', [])
-        if isinstance(fs, dict) and fs.get('columns')
-    )
+    # Trim preprocessed summaries: drop analytics and raw content to save tokens
+    slim_summaries = []
+    for fs in session.get('preprocessed_summaries', []):
+        if not isinstance(fs, dict):
+            continue
+        slim = {k: v for k, v in fs.items()
+                if k not in ('analytics', 'sample_rows', '_thumbnail_b64',
+                             'text_content', 'vision_description')}
+        slim_summaries.append(slim)
 
-    # Pre-compute column totals per file for cross-file comparison
+    # Build clearly labelled per-file stat blocks
+    file_blocks = []
+    for fs in slim_summaries:
+        fname = fs.get('filename', 'unknown')
+        num = fs.get('numeric_summary', {})
+        cat = fs.get('categorical_summary', {})
+        col_list = ', '.join(
+            f'{c["name"]} ({c["dtype"]})' for c in fs.get('columns', [])
+            if isinstance(c, dict) and 'name' in c
+        )
+        block = f'=== FILE: {fname} ===\n'
+        if col_list:
+            block += f'Columns: {col_list}\n'
+        if num:
+            block += 'Numeric summary (SUM = column total, all values from THIS file only):\n'
+            for col, stats in num.items():
+                stats_str = ', '.join(f'{k}={v}' for k, v in stats.items() if v is not None)
+                block += f'  [{fname}] {col}: {stats_str}\n'
+        if cat:
+            block += 'Categorical summary:\n'
+            for col, vc in list(cat.items())[:5]:
+                block += f'  {col}: {dict(list(vc.items())[:5])}\n'
+        file_blocks.append(block)
+    file_summaries_str = '\n'.join(file_blocks)
+
+    # Trim Phase 1: keep key fields only
+    is_cpu = (tier == 'cpu')
+    system_prompt = FOLLOWUP_SYSTEM_PROMPT_CPU if is_cpu else FOLLOWUP_SYSTEM_PROMPT
+
+    # For CPU tier: drop phase1 entirely, truncate narrative to save context
+    if is_cpu:
+        phase1_str = ''
+        narrative_text = session['final_narrative']
+        words = narrative_text.split()
+        if len(words) > 400:
+            narrative_text = ' '.join(words[:400]) + '\n\n[Report truncated for context efficiency.]'
+    else:
+        slim_phase1 = []
+        for r in session.get('phase1_results', []):
+            if not isinstance(r, dict):
+                continue
+            slim_phase1.append({
+                'filename': r.get('filename'),
+                'data_overview': r.get('data_overview'),
+                'key_observations': r.get('key_observations', [])[:5],
+                'patterns_detected': r.get('patterns_detected', [])[:5],
+                'archaeological_relevance': r.get('archaeological_relevance'),
+                'confidence': r.get('confidence'),
+                'limitations': r.get('limitations', [])[:3],
+            })
+        phase1_str = json.dumps(slim_phase1, indent=2, default=str)
+        narrative_text = session['final_narrative']
+
+    # Pre-compute cross-file column totals
     totals_summary = []
     for fs in session.get('preprocessed_summaries', []):
         if not isinstance(fs, dict):
             continue
         ct = fs.get('column_totals', {})
         if ct:
-            # Only include numeric columns, cap at 15 per file
             items = list(ct.items())[:15]
             totals_summary.append(
                 f'  {fs["filename"]}: ' +
-                ', '.join(f'{col}={val}' for col, val in items)
+                ', '.join(f'SUM {col}={val}' for col, val in items)
             )
-    totals_block = 'PRE-COMPUTED COLUMN TOTALS PER FILE (ground truth, use verbatim):\n' + '\n'.join(totals_summary) if totals_summary else ''
-
+    totals_block = (
+        'PRE-COMPUTED COLUMN SUMS (total of all values, NOT row counts):\n'
+        + '\n'.join(totals_summary) + '\n\n'
+    ) if totals_summary else ''
+    
     user_message = (
         f'ORIGINAL RESEARCH QUESTION: {session["original_prompt"]}\n\n'
         f'FILES ANALYZED: {", ".join(session.get("files_analyzed", []))}\n\n'
-        + (f'COLUMN NAMES AND TYPES:\n{col_info}\n\n' if col_info else '')
-        + (f'{totals_block}\n\n' if totals_block else '')
-        + f'FILE SUMMARIES:\n{file_summaries_str}\n\n'
-        f'PHASE 1 ANALYSES:\n{phase1_str}\n\n'
-        f'FINAL INTERPRETATION REPORT:\n{session["final_narrative"]}\n\n'
+        + (f'{totals_block}' if totals_block and not is_cpu else '')
+        + f'PER-FILE STATISTICS:\n{file_summaries_str}\n\n'
+        + (f'PHASE 1 ANALYSES:\n{phase1_str}\n\n' if phase1_str else '')
+        + f'FINAL INTERPRETATION REPORT:\n{narrative_text}\n\n'
         + (f'CONVERSATION HISTORY:\n{history_text}\n\n' if history_text else '')
         + f'FOLLOW-UP QUESTION: {question}\n\n'
-        'If a chart would help, embed a CHART_REQUEST: line first (no backticks). '
-        'Then write your prose answer.'
+        + ('' if is_cpu else
+           'If a chart would help, embed a CHART_REQUEST: line first (no backticks). '
+           'Then write your prose answer.')
     )
 
     print(f"DEBUG USER MESSAGE (first 1000 chars):\n{user_message[:1000]}")#DEBUG
     response = ollama.chat(
         model=session['model'],
         messages=[
-            {'role': 'system', 'content': FOLLOWUP_SYSTEM_PROMPT},
+            {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_message},
         ],
-        options={'temperature': 0.1},
+        options={
+            'temperature': 0.1,
+            'repeat_penalty': 1.15,
+            'num_predict': get_num_predict(tier, 'followup'),
+        },
     )
 
     raw = response['message']['content']
     print(f"DEBUG RAW:\n{raw[:800]}") #DEBUG
 
-    # ── Pass 1: explicit CHART_REQUEST: lines ─────────────────────────────
-    chart_requests: list[dict] = []
-    clean_lines: list[str] = []
+    # Chart detection: skip entirely for CPU tier (model too small, context too tight)
+    chart_paths: list = []
+    if is_cpu:
+        answer_text = raw.strip()
+    else:
+        # ── Pass 1: explicit CHART_REQUEST: lines ─────────────────────────
+        chart_requests: list[dict] = []
+        clean_lines: list[str] = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if 'CHART_REQUEST:' in stripped:
+                json_part = stripped.split('CHART_REQUEST:', 1)[1].strip().strip('`').strip()
+                try:
+                    chart_requests.append(json.loads(json_part))
+                except json.JSONDecodeError:
+                    req = _parse_natural_language_chart(json_part, session)
+                    if req:
+                        chart_requests.append(req)
+            else:
+                clean_lines.append(line)
+        cleaned_text = '\n'.join(clean_lines)
 
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if 'CHART_REQUEST:' in stripped:
-            json_part = stripped.split('CHART_REQUEST:', 1)[1].strip().strip('`').strip()
+        # ── Pass 2: JSON code-block fallback ──────────────────────────────
+        json_block_re = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.DOTALL)
+        for m in json_block_re.finditer(cleaned_text):
             try:
-                chart_requests.append(json.loads(json_part))
+                obj = json.loads(m.group(1))
+                if 'chart_type' in obj or ('type' in obj and 'data' in obj):
+                    req = _normalize_loose_chart(obj, session)
+                    if req:
+                        chart_requests.append(req)
+                        cleaned_text = cleaned_text.replace(m.group(0), '').strip()
             except json.JSONDecodeError:
-                req = _parse_natural_language_chart(json_part, session)
-                if req:
-                    chart_requests.append(req)
-        else:
-            clean_lines.append(line)
+                pass
 
-    cleaned_text = '\n'.join(clean_lines)
-
-    # ── Pass 2: JSON code-block fallback ──────────────────────────────────
-    json_block_re = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.DOTALL)
-    for m in json_block_re.finditer(cleaned_text):
-        try:
-            obj = json.loads(m.group(1))
-            if 'chart_type' in obj or ('type' in obj and 'data' in obj):
-                req = _normalize_loose_chart(obj, session)
+        # ── Pass 3: X-axis/Y-axis/Data text blocks ────────────────────────
+        text_block_re = re.compile(r'```[^\n]*\n(.*?)```', re.DOTALL)
+        for m in text_block_re.finditer(cleaned_text):
+            block = m.group(1)
+            if 'X-axis:' in block and 'Y-axis:' in block and 'Data:' in block:
+                req = _parse_text_chart(block, session)
                 if req:
                     chart_requests.append(req)
                     cleaned_text = cleaned_text.replace(m.group(0), '').strip()
-        except json.JSONDecodeError:
-            pass
 
-    # ── Pass 3: X-axis/Y-axis/Data text blocks ────────────────────────────
-    text_block_re = re.compile(r'```[^\n]*\n(.*?)```', re.DOTALL)
-    for m in text_block_re.finditer(cleaned_text):
-        block = m.group(1)
-        if 'X-axis:' in block and 'Y-axis:' in block and 'Data:' in block:
-            req = _parse_text_chart(block, session)
-            if req:
-                chart_requests.append(req)
-                cleaned_text = cleaned_text.replace(m.group(0), '').strip()
+        # ── Pass 4: empty code blocks ─────────────────────────────────────
+        empty_block_re = re.compile(r'```\s*```', re.DOTALL)
+        if empty_block_re.search(cleaned_text):
+            cleaned_text = empty_block_re.sub('', cleaned_text).strip()
+            if not chart_requests:
+                inferred = _infer_chart_from_prose(cleaned_text, session)
+                if inferred:
+                    chart_requests.append(inferred)
 
-    # ── Pass 4: empty code blocks ─────────────────────────────────────────
-    empty_block_re = re.compile(r'```\s*```', re.DOTALL)
-    if empty_block_re.search(cleaned_text):
-        cleaned_text = empty_block_re.sub('', cleaned_text).strip()
-        if not chart_requests:
+        # ── Pass 5: unconditional prose inference ─────────────────────────
+        chart_keywords = {
+            'scatterplot', 'scatter plot', 'histogram', 'bar chart', 'bar graph',
+            'line chart', 'line plot', 'chart shows', 'plot shows', 'plot of',
+            'chart of', 'the following chart', 'the following plot', 'visualiz',
+            'kernel density', 'kde', 'density map', 'heatmap', 'heat map',
+            'spatial distribution', 'point distribution', 'map of',
+            'geometry', 'geographic', 'coordinates',
+        }
+        if not chart_requests and any(kw in cleaned_text.lower() for kw in chart_keywords):
             inferred = _infer_chart_from_prose(cleaned_text, session)
             if inferred:
                 chart_requests.append(inferred)
 
-    # ── Pass 5: unconditional prose inference ─────────────────────────────
-    chart_keywords = {
-        'scatterplot', 'scatter plot', 'histogram', 'bar chart', 'bar graph',
-        'line chart', 'line plot', 'chart shows', 'plot shows', 'plot of',
-        'chart of', 'the following chart', 'the following plot', 'visualiz',
-        'kernel density', 'kde', 'density map', 'heatmap', 'heat map',
-        'spatial distribution', 'point distribution', 'map of',
-        'geometry', 'geographic', 'coordinates',
-    }
-    if not chart_requests and any(kw in cleaned_text.lower() for kw in chart_keywords):
-        inferred = _infer_chart_from_prose(cleaned_text, session)
-        if inferred:
-            chart_requests.append(inferred)
+        # ── Strip remaining ASCII box art ─────────────────────────────────
+        ascii_box_re = re.compile(r'```[^\n]*\n[\s\S]*?[+\-|=]{3,}[\s\S]*?```', re.DOTALL)
+        cleaned_text = ascii_box_re.sub('', cleaned_text).strip()
 
-    # ── Strip remaining ASCII box art ─────────────────────────────────────
-    ascii_box_re = re.compile(r'```[^\n]*\n[\s\S]*?[+\-|=]{3,}[\s\S]*?```', re.DOTALL)
-    cleaned_text = ascii_box_re.sub('', cleaned_text).strip()
+        answer_text = cleaned_text.strip()
 
-    answer_text = cleaned_text.strip()
+        if chart_requests:
+            session_id = session.get('session_id', 'followup')
+            chart_paths = generate_followup_charts(
+                chart_requests=chart_requests,
+                session=session,
+                session_id=session_id,
+            )
 
-    # ── Generate charts ───────────────────────────────────────────────────
-    chart_paths: list = []
-    if chart_requests:
-        session_id = session.get('session_id', 'followup')
-        chart_paths = generate_followup_charts(
-            chart_requests=chart_requests,
-            session=session,
-            session_id=session_id,
-        )
-    #DEBUG
-    print(f"DEBUG chart_requests: {chart_requests}")
-    print(f"DEBUG chart_paths: {chart_paths}")
-    print(f"DEBUG file_paths: {session.get('file_paths', {})}")
     return answer_text, chart_paths

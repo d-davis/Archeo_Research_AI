@@ -203,6 +203,7 @@ def preprocess_files(file_pairs, model_config, args, prompt_override=None):
 
 def run_full_pipeline(preprocessed, user_prompt, model_config, args):
     """Phase 1 + 2 + optional Phase 3 critique/revision."""
+    tier = model_config['tier']
     console.print('\n[dim]Assembling context package...[/dim]')
     context = assemble_context(
         preprocessed_files=preprocessed,
@@ -239,7 +240,8 @@ def run_full_pipeline(preprocessed, user_prompt, model_config, args):
             phase1_results=phase1_results,
             user_prompt=user_prompt,
             model=model_config['model'],
-            file_summaries=preprocessed
+            file_summaries=preprocessed,
+            tier=tier,
         )
         prog.remove_task(task)
     console.print('  [green]v[/green] Draft complete')
@@ -257,7 +259,8 @@ def run_full_pipeline(preprocessed, user_prompt, model_config, args):
                 phase1_results=phase1_results,
                 user_prompt=user_prompt,
                 model=model_config['model'],
-                file_summaries=preprocessed
+                file_summaries=preprocessed,
+                tier=tier,
             )
             prog.remove_task(task)
         n_flags = len(critique_result.get('flagged_claims', []))
@@ -274,7 +277,8 @@ def run_full_pipeline(preprocessed, user_prompt, model_config, args):
                 critique_result=critique_result,
                 user_prompt=user_prompt,
                 model=model_config['model'],
-                file_summaries=preprocessed
+                file_summaries=preprocessed,
+                tier=tier,
             )
             prog.remove_task(task)
         console.print('  [green]v[/green] Revision complete')
@@ -334,7 +338,8 @@ def interactive_loop(session, model_config, args, session_path):
                     phase1_results=session.get('phase1_results', []),
                     user_prompt=question,
                     model=session['model'],
-                    file_summaries=session.get('preprocessed_summaries', [])
+                    file_summaries=session.get('preprocessed_summaries', []),
+                    tier=session.get('tier', 'mid'),
                 )
                 if critique.get('flagged_claims'):
                     answer = run_revision(
@@ -342,7 +347,8 @@ def interactive_loop(session, model_config, args, session_path):
                         critique_result=critique,
                         user_prompt=question,
                         model=session['model'],
-                        file_summaries=session.get('preprocessed_summaries', [])
+                        file_summaries=session.get('preprocessed_summaries', []),
+                        tier=session.get('tier', 'mid'),
                     )
                 prog.remove_task(task)
         add_turn(session, 'assistant', answer)
@@ -370,6 +376,7 @@ def main():
         model_override=args.model,
         vision_model_override=args.vision_model
     )
+    tier = model_config['tier'] 
     console.print(f"[green]Text model:[/green]   {model_config['model']} ({model_config['tier_label']})")
     console.print(f"[green]Vision model:[/green] {model_config['vision_model']}")
 
@@ -394,7 +401,8 @@ def main():
                     result = run_phase1(
                         file_summary=fs,
                         user_prompt=session['original_prompt'],
-                        model=session['model']
+                        model=session['model'],
+                        tier=session.get('tier', 'mid'),
                     )
                     new_phase1.append(result)
                     prog.remove_task(task)
@@ -408,7 +416,8 @@ def main():
                     new_phase1_results=new_phase1,
                     new_file_summaries=new_preprocessed,
                     new_files=new_filenames,
-                    model=session['model']
+                    model=session['model'],
+                    tier=session.get('tier', 'mid'), 
                 )
                 prog.remove_task(task)
             if not args.no_critique:
@@ -420,7 +429,8 @@ def main():
                         phase1_results=new_phase1,
                         user_prompt=session['original_prompt'],
                         model=session['model'],
-                        file_summaries=new_preprocessed
+                        file_summaries=new_preprocessed,
+                        tier=session.get('tier', 'mid'),
                     )
                     prog.remove_task(task)
                 with Progress(SpinnerColumn(), TextColumn('[progress.description]{task.description}'),
@@ -431,7 +441,8 @@ def main():
                         critique_result=supp_critique,
                         user_prompt=session['original_prompt'],
                         model=session['model'],
-                        file_summaries=new_preprocessed
+                        file_summaries=new_preprocessed,
+                        tier=session.get('tier', 'mid'),
                     )
                     prog.remove_task(task)
             session['preprocessed_summaries'].extend(new_preprocessed)
@@ -498,6 +509,7 @@ def main():
         critique_result=critique_result,
         session_name=args.session_name,
     )
+    session['tier'] = tier
     session_path = save_session(session)
     if not args.no_interactive:
         interactive_loop(session, model_config, args, session_path)

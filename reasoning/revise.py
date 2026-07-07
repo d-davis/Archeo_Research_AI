@@ -1,23 +1,9 @@
 """
 Phase 3b: Revision model.
-
-Receives the original Phase 2 narrative and the critic's structured JSON
-output. Produces a revised Markdown narrative that addresses every flagged
-claim with a documented change.
-
-The revision model is instructed to:
-  1. Address every high-severity flag (required)
-  2. Address every medium-severity flag unless there is a documented reason not to
-  3. Consider but optionally address low-severity flags
-  4. Preserve all well-supported content unchanged
-  5. Append a Revision Log section listing exactly what changed and why
-
-The revision log gives the human analyst a clear audit trail: they can
-compare original vs. revised and decide whether the critic's concerns were
-addressed appropriately.
 """
 import json
 import ollama
+from config import get_num_predict
 
 REVISION_SYSTEM_PROMPT = """You are an expert archaeological writer revising an interpretation report
 based on a peer reviewer's structured critique.
@@ -28,25 +14,17 @@ RULES:
 3. Consider LOW-severity flags at your discretion.
 4. Do NOT change content that was not flagged. Preserve well-supported claims.
 5. Do NOT add new claims that are not supported by the data.
-6. When a flagged claim contains a potentially useful hypothesis or research
-   direction, DO NOT remove it. Instead, reframe it with explicit hedging
-   language (e.g. "This may suggest...", "One possible interpretation is...",
-   "This pattern warrants further investigation to determine whether...").
-   Preserving speculative insights as clearly-labelled hypotheses is preferable
-   to deletion. The goal is calibration, not suppression.
+6. When a flagged claim contains a useful hypothesis, DO NOT remove it.
+   Reframe with explicit hedging: "This may suggest...", "One possible interpretation is...",
+   "This pattern warrants further investigation to determine whether..."
 7. Maintain the same Markdown section structure as the original.
 
-After the revised report, append a section titled:
-
+After the revised report, append:
 ## Revision Log
-
-List each change made in this format:
 - **[Flag type] [Severity]**: Original claim -> What was changed and why.
+- **[Flag type] [Severity] -- No change**: Reason original wording was retained.
 
-If a flagged claim was reviewed but NOT changed, document the reason:
-- **[Flag type] [Severity] -- No change**: Reason the original wording was retained.
-
-Be precise and honest. The revision log is part of the scientific record."""
+Be precise. The revision log is part of the scientific record."""
 
 
 def run_revision(
@@ -55,33 +33,18 @@ def run_revision(
     user_prompt: str,
     model: str,
     file_summaries: list,
+    tier: str = 'mid',
 ) -> str:
-    """
-    Revise the Phase 2 narrative to address the critic's flags.
-
-    Args:
-        original_narrative: Phase 2 Markdown narrative
-        critique_result:    Structured critique dict from critic.py
-        user_prompt:        Original researcher query
-        model:              Ollama model name
-        file_summaries:     Preprocessed file summaries (for reference)
-
-    Returns:
-        Revised Markdown string with appended Revision Log.
-    """
-    # If critique had no flags or errored, return original unchanged
     flags = critique_result.get('flagged_claims', [])
     if not flags or critique_result.get('overall_assessment') in ('error', 'parse_error'):
         return original_narrative + '\n\n## Revision Log\n\nNo changes required. Critique found no significant issues.\n'
 
-    file_list    = ', '.join(s['filename'] for s in file_summaries)
+    file_list = ', '.join(s['filename'] for s in file_summaries)
     critique_str = json.dumps(critique_result, indent=2, default=str)
 
-    # Summarize flags for the prompt to keep context tight
     flag_summary = '\n'.join(
         f"- [{f.get('severity','?').upper()}] {f.get('problem_type','?')}: "
-        f"\"{f.get('claim','?')[:120]}\" "
-        f"-> {f.get('revision_suggestion','?')}"
+        f"\"{f.get('claim','?')[:120]}\" -> {f.get('revision_suggestion','?')}"
         for f in flags
     )
 
@@ -100,8 +63,12 @@ def run_revision(
         model=model,
         messages=[
             {'role': 'system', 'content': REVISION_SYSTEM_PROMPT},
-            {'role': 'user',   'content': user_message},
+            {'role': 'user', 'content': user_message},
         ],
-        options={'temperature': 0.15},
+        options={
+            'temperature': 0.15,
+            'repeat_penalty': 1.15,
+            'num_predict': get_num_predict(tier, 'revise'),
+        },
     )
     return response['message']['content']

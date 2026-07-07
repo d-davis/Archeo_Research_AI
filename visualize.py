@@ -456,15 +456,15 @@ def _fu_kde_heatmap(df, lat_col: str, lon_col: str, title: str, out_dir: Path, s
         if hasattr(df, 'geometry'):
             pts = df[df.geometry.geom_type == 'Point'].copy()
             if pts.empty:
+                # Non-point geometry: use centroids
                 pts = df.copy()
                 pts['_lon'] = df.geometry.centroid.x
                 pts['_lat'] = df.geometry.centroid.y
-                lon_col, lat_col = '_lon', '_lat'
             else:
-                pts = pts.copy()
                 pts['_lon'] = pts.geometry.x
                 pts['_lat'] = pts.geometry.y
-                lon_col, lat_col = '_lon', '_lat'
+            lon_col = '_lon'
+            lat_col = '_lat'
             df = pts
     except Exception:
         pass

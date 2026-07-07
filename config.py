@@ -1,6 +1,8 @@
 """
 Hardware detection and model tier configuration.
 Phase 2 update: adds vision_model per tier.
+Phase 3 update: adds NUM_PREDICT token caps per tier and phase.
+               Fixes vision model tags for cpu/low tiers.
 """
 import subprocess
 from typing import Optional
@@ -10,30 +12,84 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 
 TIERS = {
     'cpu': {
-        'tier_label':    'CPU Only',
-        'model':         'phi3:mini',
-        'vision_model':  'llava:7b-v1.6-q4_K_M',
+        'tier_label': 'CPU Only',
+        'model': 'phi3:mini',
+        'vision_model': 'llava:7b',
         'context_limit': 4096,
     },
     'low': {
-        'tier_label':    'Low GPU (6-8 GB VRAM)',
-        'model':         'llama3.1:8b-instruct-q4_K_M',
-        'vision_model':  'llava:7b-v1.6-q4_K_M',
+        'tier_label': 'Low GPU (6-8 GB VRAM)',
+        'model': 'llama3.1:8b-instruct-q4_K_M',
+        'vision_model': 'llava:7b',
         'context_limit': 8192,
     },
     'mid': {
-        'tier_label':    'Mid GPU (16-24 GB VRAM)',
-        'model':         'llama3.3:70b-instruct-q4_K_M',
-        'vision_model':  'llama3.2-vision:11b-instruct-q4_K_M',
+        'tier_label': 'Mid GPU (16-24 GB VRAM)',
+        'model': 'llama3.3:70b-instruct-q4_K_M',
+        'vision_model': 'llama3.2-vision:11b',
         'context_limit': 16384,
     },
     'high': {
-        'tier_label':    'High GPU (48+ GB VRAM)',
-        'model':         'llama3.3:70b-instruct-fp16',
-        'vision_model':  'llama3.2-vision:11b-instruct-q4_K_M',
+        'tier_label': 'High GPU (48+ GB VRAM)',
+        'model': 'llama3.3:70b-instruct-fp16',
+        'vision_model': 'llama3.2-vision:11b',
         'context_limit': 32768,
     },
 }
+
+NUM_PREDICT = {
+    'cpu': {
+        'phase1':   768,
+        'phase2':  1536,
+        'critique': 768,
+        'revise':  1536,
+        'delta':   1024,
+        'followup': 1024,
+        'vision':   384,
+    },
+    'low': {
+        'phase1':  1024,
+        'phase2':  2048,
+        'critique': 1024,
+        'revise':  2048,
+        'delta':   1536,
+        'followup': 1536,
+        'vision':   512,
+    },
+    'mid': {
+        'phase1':  1536,
+        'phase2':  3072,
+        'critique': 1536,
+        'revise':  3072,
+        'delta':   2048,
+        'followup': 2048,
+        'vision':   768,
+    },
+    'high': {
+        'phase1':  2048,
+        'phase2':  4096,
+        'critique': 2048,
+        'revise':  4096,
+        'delta':   3072,
+        'followup': 3072,
+        'vision':  1024,
+    },
+}
+
+
+def get_num_predict(tier: str, phase: str) -> int:
+    """
+    Return the num_predict cap for a given hardware tier and pipeline phase.
+
+    Args:
+        tier:  'cpu' | 'low' | 'mid' | 'high'
+        phase: 'phase1' | 'phase2' | 'critique' | 'revise' |
+               'delta' | 'followup' | 'vision'
+
+    Returns:
+        Token cap (int). Defaults to mid-tier phase2 value if not found.
+    """
+    return NUM_PREDICT.get(tier, NUM_PREDICT['mid']).get(phase, 3072)
 
 
 def check_ollama() -> bool:
@@ -60,11 +116,11 @@ def get_available_vram_gb() -> Optional[float]:
 
 def detect_tier() -> str:
     vram = get_available_vram_gb()
-    if vram is None:  return 'cpu'
-    if   vram >= 40:  return 'high'
-    elif vram >= 14:  return 'mid'
-    elif vram >=  5:  return 'low'
-    else:             return 'cpu'
+    if vram is None: return 'cpu'
+    if vram >= 40:   return 'high'
+    elif vram >= 14: return 'mid'
+    elif vram >= 5:  return 'low'
+    else:            return 'cpu'
 
 
 def get_model_config(
@@ -74,7 +130,7 @@ def get_model_config(
 ) -> dict:
     """
     Return model configuration for the specified tier.
-    Phase 2: accepts optional vision_model_override.
+    Phase 3: tier is stored in returned config for use by reasoning scripts.
     """
     if tier == 'auto':
         tier = detect_tier()
