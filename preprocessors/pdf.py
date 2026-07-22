@@ -13,10 +13,10 @@ INSTALL:
   pip install pymupdf4llm
 
 TEXT_CHAR_LIMIT -- set per hardware tier:
-  CPU only  (phi3:mini,     4K context):  8_000
-  Low GPU   (llama3.1:8b,   8K context): 16_000
-  Mid GPU   (llama3.3:70b, 16K context): 50_000  <-- default
-  High GPU  (llama3.3:70b, 32K context): 80_000
+  CPU only  (phi3:mini,     4K context):  8000
+  Low GPU   (llama3.1:8b,   8K context): 16000
+  Mid GPU   (llama3.3:70b, 16K context): 50000  <-- default
+  High GPU  (llama3.3:70b, 32K context): 80000
 """
 import io
 import re
@@ -44,8 +44,8 @@ except ImportError:
 
 from preprocessors.imagery import preprocess_imagery
 
-TEXT_CHAR_LIMIT       = 50_000   # adjust for your hardware tier (see docstring)
-MIN_FIGURE_SIZE_BYTES = 5_000
+TEXT_CHAR_LIMIT       = 50000   # adjust for your hardware tier (see docstring)
+MIN_FIGURE_SIZE_BYTES = 5000
 MIN_FIGURE_DIM        = 100
 TMP_DIR               = Path('./tmp/pdf_figures')
 

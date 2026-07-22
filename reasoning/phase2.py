@@ -5,6 +5,7 @@ import json
 from typing import List
 import ollama
 from config import get_num_predict
+from pathlib import Path
 
 PHASE2_SYSTEM_PROMPT = """You are an expert archaeological analyst producing a formal interpretive report.
 You have received individual analyses of one or more datasets (Phase 1 results).
@@ -17,7 +18,11 @@ RULES:
 5. Use appropriate epistemic caution. Do not introduce information not in the provided analyses.
 6. Only reference variables present in the provided analyses.
 7. Use PRE-COMPUTED COLUMN TOTALS PER FILE verbatim for cross-file comparisons.
-
+8. When PDF SOURCE TEXT or TABULAR SOURCE DATA is provided, treat it as the authoritative source for
+   specific facts, numbers, dates, and names. Do NOT generate or estimate values
+   not explicitly present in that text. If a requested value cannot be found,
+   state this explicitly rather than approximating.
+   
 Format your response as Markdown with these sections:
 ## Summary
 ## Data Overview
@@ -36,7 +41,9 @@ def run_phase2(
     model: str,
     file_summaries: List[dict],
     tier: str = 'mid',
+    file_paths: dict = None,
 ) -> str:
+    print(f"DEBUG file_paths received: {file_paths}")
     slim_phase1 = []
     for r in phase1_results:
         if not isinstance(r, dict):
@@ -94,9 +101,59 @@ def run_phase2(
         file_blocks.append(block)
     file_summaries_str = '\n'.join(file_blocks)
 
+    # Include raw PDF text for direct fact retrieval
+    pdf_text_blocks = []
+    for fs in file_summaries:
+        if not isinstance(fs, dict):
+            continue
+        if 'pdf' in str(fs.get('data_type', '')).lower() and fs.get('text_content'):
+            fname = fs.get('filename', 'unknown')
+            txt = fs['text_content']
+            if len(txt) > 12000:
+                txt = txt[:12000] + '\n[... text truncated ...]'
+            pdf_text_blocks.append(f'=== PDF SOURCE TEXT: {fname} ===\n{txt}')
+
+    # Include raw CSV data for row-level fact retrieval
+    csv_text_blocks = []
+    if file_paths:
+        tabular_exts = {'.csv', '.xlsx', '.xls', '.txt'}
+        n_csv_files = sum(1 for fs in file_summaries if isinstance(fs, dict)
+                          and Path(fs.get('filename', '')).suffix.lower() in tabular_exts)
+        max_rows = (100 if tier == 'low' else 200) if n_csv_files > 1 else (200 if tier == 'low' else 500)
+        for fs in file_summaries:
+            if not isinstance(fs, dict):
+                continue
+            fname = fs.get('filename', '')
+            if Path(fname).suffix.lower() not in tabular_exts:
+                continue
+            fpath = file_paths.get(fname)
+            print(f"DEBUG csv path check: fname={fname}, fpath={fpath}, exists={Path(fpath).exists() if fpath else 'no path'}")
+            if not fpath or not Path(fpath).exists():
+                continue
+            try:
+                import pandas as pd
+                from pathlib import Path as _Path
+                df = pd.read_csv(fpath) if _Path(fpath).suffix.lower() == '.csv' else pd.read_excel(fpath)
+                if len(df) > max_rows:
+                    csv_text = df.head(max_rows).to_markdown(index=False)
+                    csv_text += f'\n[... {len(df) - max_rows} rows truncated ...]'
+                else:
+                    csv_text = df.to_markdown(index=False)
+                csv_text_blocks.append(f'=== TABULAR SOURCE DATA: {fname} ===\n{csv_text}')
+            except Exception:
+                pass
+
+    # Sort so files mentioned in the prompt appear first
+    def _relevance(block):
+        fname = block.split('\n')[0].replace('=== TABULAR SOURCE DATA: ', '').replace(' ===', '').strip()
+        return 0 if fname.lower().replace('_', ' ') in user_prompt.lower().replace('_', ' ') else 1
+    csv_text_blocks.sort(key=_relevance)
+    
     user_message = (
         f"RESEARCHER QUESTION: {user_prompt}\n\n"
         f"FILES ANALYZED: {file_list}\n\n"
+        + (('\n'.join(pdf_text_blocks) + '\n\n') if pdf_text_blocks else '')
+        + (('\n'.join(csv_text_blocks) + '\n\n') if csv_text_blocks else '')
         + totals_block
         + f"PER-FILE STATISTICS (each section is for ONE file only):\n{file_summaries_str}\n\n"
         + f"PHASE 1 INDIVIDUAL ANALYSES:\n{results_str}\n\n"
@@ -104,6 +161,8 @@ def run_phase2(
         "that directly addresses the researcher's question."
     )
 
+    print(f"DEBUG csv_text_blocks count: {len(csv_text_blocks)}")
+    print(f"DEBUG user_message first 800 chars:\n{user_message[:800]}")
     response = ollama.chat(
         model=model,
         messages=[

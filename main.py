@@ -201,7 +201,7 @@ def preprocess_files(file_pairs, model_config, args, prompt_override=None):
     return preprocessed
 
 
-def run_full_pipeline(preprocessed, user_prompt, model_config, args):
+def run_full_pipeline(preprocessed, user_prompt, model_config, args, file_paths=None):
     """Phase 1 + 2 + optional Phase 3 critique/revision."""
     tier = model_config['tier']
     console.print('\n[dim]Assembling context package...[/dim]')
@@ -242,6 +242,7 @@ def run_full_pipeline(preprocessed, user_prompt, model_config, args):
             model=model_config['model'],
             file_summaries=preprocessed,
             tier=tier,
+            file_paths=file_paths,
         )
         prog.remove_task(task)
     console.print('  [green]v[/green] Draft complete')
@@ -479,8 +480,9 @@ def main():
     )
 
     preprocessed = preprocess_files(file_pairs, model_config, args)
+    file_paths = {p.name: str(p) for p, _ in file_pairs}          # ADD THIS
     phase1_results, final_narrative, critique_result, original_narrative = \
-        run_full_pipeline(preprocessed, args.prompt, model_config, args)
+        run_full_pipeline(preprocessed, args.prompt, model_config, args, file_paths=file_paths)
 
     output_path = save_output(
         narrative=final_narrative,

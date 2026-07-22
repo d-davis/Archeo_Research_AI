@@ -31,6 +31,11 @@ RULES:
    python main.py --resume <session_file.json> --files <new_files>
 5. Distinguish observation (what the data shows) from inference (what you conclude).
 6. Do not reproduce large portions of the original report unnecessarily.
+7. When PDF SOURCE TEXT or TABULAR SOURCE DATA is provided, treat it as the authoritative source for
+   specific facts, numbers, dates, and names. Do NOT generate or estimate values
+   not explicitly present in that text. If a requested value cannot be found in
+   the provided text, say explicitly: "This information is not present in the
+   provided source text."
 
 CHART REQUESTS:
 If a chart or plot would help answer the question, embed a CHART_REQUEST: line
@@ -329,10 +334,13 @@ def run_followup(question: str, session: dict) -> tuple[str, list]:
     Returns (answer_text, chart_paths).
     """
     tier = session.get('tier', 'mid')
+    is_cpu = (tier == 'cpu')
+    system_prompt = FOLLOWUP_SYSTEM_PROMPT_CPU if is_cpu else FOLLOWUP_SYSTEM_PROMPT
     history_text = get_history_text(session)
 
     # Trim preprocessed summaries: drop analytics and raw content to save tokens
     slim_summaries = []
+    pdf_text_blocks = []
     for fs in session.get('preprocessed_summaries', []):
         if not isinstance(fs, dict):
             continue
@@ -340,6 +348,50 @@ def run_followup(question: str, session: dict) -> tuple[str, list]:
                 if k not in ('analytics', 'sample_rows', '_thumbnail_b64',
                              'text_content', 'vision_description')}
         slim_summaries.append(slim)
+        # Collect PDF text separately for fact retrieval (skip on CPU — no context room)
+        if not is_cpu and 'pdf' in str(fs.get('data_type', '')).lower() and fs.get('text_content'):
+            fname = fs.get('filename', 'unknown')
+            txt = fs['text_content']
+            # Cap at 6000 chars to stay within context budget
+            if len(txt) > 12000:
+                txt = txt[:12000] + '\n[... text truncated ...]'
+            pdf_text_blocks.append(f'=== PDF SOURCE TEXT: {fname} ===\n{txt}')
+
+    # Include raw CSV data for row-level fact retrieval (skip on CPU)
+    csv_text_blocks = []
+    if not is_cpu:
+        file_paths = session.get('file_paths', {})
+        tabular_exts = {'.csv', '.xlsx', '.xls', '.txt'}
+        n_csv_files = sum(1 for fs in session.get('preprocessed_summaries', [])
+                          if isinstance(fs, dict)
+                          and Path(fs.get('filename', '')).suffix.lower() in tabular_exts)
+        max_rows = (100 if tier == 'low' else 200) if n_csv_files > 1 else (200 if tier == 'low' else 500)
+        for fs in session.get('preprocessed_summaries', []):
+            if not isinstance(fs, dict):
+                continue
+            fname = fs.get('filename', '')
+            if Path(fname).suffix.lower() not in tabular_exts:
+                continue
+            fpath = file_paths.get(fname)
+            if not fpath or not Path(fpath).exists():
+                continue
+            try:
+                import pandas as pd
+                df = pd.read_csv(fpath) if Path(fpath).suffix.lower() == '.csv' else pd.read_excel(fpath)
+                if len(df) > max_rows:
+                    csv_text = df.head(max_rows).to_markdown(index=False)
+                    csv_text += f'\n[... {len(df) - max_rows} rows truncated ...]'
+                else:
+                    csv_text = df.to_markdown(index=False)
+                csv_text_blocks.append(f'=== TABULAR SOURCE DATA: {fname} ===\n{csv_text}')
+            except Exception:
+                pass
+
+    # Sort so files mentioned in the question appear first
+    def _relevance(block):
+        fname = block.split('\n')[0].replace('=== TABULAR SOURCE DATA: ', '').replace(' ===', '').strip()
+        return 0 if fname.lower().replace('_', ' ') in question.lower().replace('_', ' ') else 1
+    csv_text_blocks.sort(key=_relevance)
 
     # Build clearly labelled per-file stat blocks
     file_blocks = []
@@ -367,9 +419,6 @@ def run_followup(question: str, session: dict) -> tuple[str, list]:
     file_summaries_str = '\n'.join(file_blocks)
 
     # Trim Phase 1: keep key fields only
-    is_cpu = (tier == 'cpu')
-    system_prompt = FOLLOWUP_SYSTEM_PROMPT_CPU if is_cpu else FOLLOWUP_SYSTEM_PROMPT
-
     # For CPU tier: drop phase1 entirely, truncate narrative to save context
     if is_cpu:
         phase1_str = ''
@@ -414,6 +463,8 @@ def run_followup(question: str, session: dict) -> tuple[str, list]:
     user_message = (
         f'ORIGINAL RESEARCH QUESTION: {session["original_prompt"]}\n\n'
         f'FILES ANALYZED: {", ".join(session.get("files_analyzed", []))}\n\n'
+        + (('\n'.join(pdf_text_blocks) + '\n\n') if pdf_text_blocks else '')
+        + (('\n'.join(csv_text_blocks) + '\n\n') if csv_text_blocks else '')
         + (f'{totals_block}' if totals_block and not is_cpu else '')
         + f'PER-FILE STATISTICS:\n{file_summaries_str}\n\n'
         + (f'PHASE 1 ANALYSES:\n{phase1_str}\n\n' if phase1_str else '')

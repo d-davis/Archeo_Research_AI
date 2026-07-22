@@ -171,7 +171,7 @@ def preprocess_all(saved_paths, model_config, no_vision, keep_figures, log):
     return preprocessed
 
 
-def run_pipeline(preprocessed, prompt, model_config, no_critique, log):
+def run_pipeline(preprocessed, prompt, model_config, no_critique, log, file_paths=None):
     """Phase 1 + 2 + optional critique/revision."""
     log.append('Assembling context...')
     assemble_context(preprocessed_files=preprocessed, user_prompt=prompt,
@@ -187,7 +187,7 @@ def run_pipeline(preprocessed, prompt, model_config, no_critique, log):
 
     log.append('Phase 2: Cross-file synthesis...')
     narrative = run_phase2(phase1_results=phase1_results, user_prompt=prompt,
-                           model=model_config['model'], file_summaries=preprocessed)
+                           model=model_config['model'], file_summaries=preprocessed, file_paths=file_paths)
     log.append('  Draft complete.')
 
     critique_result    = None
@@ -301,8 +301,13 @@ with tab1:
                     for msg in log:
                         st.write(msg)
 
+                    file_paths = {
+                    **{f.name: str(Path(p).resolve()) for f, p in zip(uploaded, saved_paths)},
+                    **{k: str(Path(v).resolve()) for k, v in st.session_state.get('_zip_extracted_paths', {}).items()},
+                }
                     phase1, narrative, critique, original = run_pipeline(
-                        preprocessed, prompt, model_config, no_critique, log
+                        preprocessed, prompt, model_config, no_critique, log,
+                        file_paths=file_paths,
                     )
                     for msg in log[len(log)-10:]:
                         st.write(msg)
