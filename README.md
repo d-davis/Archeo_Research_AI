@@ -1,4 +1,4 @@
-# Archaeological AI Interpreter
+# Archaeological Interpretive Synthesizer
 
 An on-premises, multi-model pipeline for analyzing geospatial, tabular, imagery, and document data and generating structured archaeological interpretations. Runs entirely locally using open-source LLMs via [Ollama](https://ollama.com). No cloud API keys. No data egress. Available as both a command-line tool and a Streamlit web interface.
 
